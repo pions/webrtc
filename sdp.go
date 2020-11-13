@@ -132,23 +132,25 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 					trackID = split[2]
 				}
 
-				isNewTrack := true
-				trackDetails := &trackDetails{}
-				for i := range incomingTracks {
-					if incomingTracks[i].ssrc == uint32(ssrc) {
-						trackDetails = &incomingTracks[i]
-						isNewTrack = false
+				if rids := getRids(media); len(rids) == 0 {
+					isNewTrack := true
+					trackDetails := &trackDetails{}
+					for i := range incomingTracks {
+						if incomingTracks[i].ssrc == uint32(ssrc) {
+							trackDetails = &incomingTracks[i]
+							isNewTrack = false
+						}
 					}
-				}
 
-				trackDetails.mid = midValue
-				trackDetails.kind = codecType
-				trackDetails.label = trackLabel
-				trackDetails.id = trackID
-				trackDetails.ssrc = uint32(ssrc)
+					trackDetails.mid = midValue
+					trackDetails.kind = codecType
+					trackDetails.label = trackLabel
+					trackDetails.id = trackID
+					trackDetails.ssrc = uint32(ssrc)
 
-				if isNewTrack {
-					incomingTracks = append(incomingTracks, *trackDetails)
+					if isNewTrack {
+						incomingTracks = append(incomingTracks, *trackDetails)
+					}
 				}
 			}
 		}
