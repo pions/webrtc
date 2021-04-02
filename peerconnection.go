@@ -570,18 +570,16 @@ func (pc *PeerConnection) getStatsID() string {
 	return pc.statsID
 }
 
-func (pc *PeerConnection) hasLocalDescriptionChanged(desc *SessionDescription) bool {
-	for _, t := range pc.GetTransceivers() {
-		m := getByMid(t.Mid(), desc)
-		if m == nil {
-			return true
-		}
-
-		if getPeerDirection(m) != t.Direction() {
+func (pc *PeerConnection) hasLocalDescriptionChanged(old []*RTPTransceiver) bool {
+	transceivers := pc.GetTransceivers()
+	if len(transceivers) != len(old) {
+		return true
+	}
+	for i, t := range transceivers {
+		if t != old[i] {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -682,7 +680,7 @@ func (pc *PeerConnection) CreateOffer(options *OfferOptions) (SessionDescription
 
 		// Verify local media hasn't changed during offer
 		// generation. Recompute if necessary
-		if isPlanB || !pc.hasLocalDescriptionChanged(&offer) {
+		if isPlanB || !pc.hasLocalDescriptionChanged(currentTransceivers) {
 			break
 		}
 		count++
