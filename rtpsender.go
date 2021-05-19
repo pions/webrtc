@@ -164,10 +164,11 @@ func (r *RTPSender) Send(parameters RTPSendParameters) error {
 
 	writeStream := &interceptorToTrackLocalWriter{}
 	r.context = TrackLocalContext{
-		id:          r.id,
-		params:      r.api.mediaEngine.getRTPParametersByKind(r.track.Kind(), []RTPTransceiverDirection{RTPTransceiverDirectionSendonly}),
-		ssrc:        parameters.Encodings[0].SSRC,
-		writeStream: writeStream,
+		id:           r.id,
+		params:       r.api.mediaEngine.getRTPParametersByKind(r.track.Kind(), []RTPTransceiverDirection{RTPTransceiverDirectionSendonly}),
+		ssrc:         parameters.Encodings[0].SSRC,
+		writeStream:  writeStream,
+		readerStream: r,
 	}
 
 	codec, err := r.track.Bind(r.context)
