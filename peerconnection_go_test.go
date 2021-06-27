@@ -158,7 +158,7 @@ func TestNew_Go(t *testing.T) {
 }
 
 func TestPeerConnection_SetConfiguration_Go(t *testing.T) {
-	// Note: this test includes all SetConfiguration features that are supported
+	// Note: this test case includes all SetConfiguration features that are supported
 	// by Go but not the WASM bindings, namely: ICEServer.Credential,
 	// ICEServer.CredentialType, and Certificates.
 	report := test.CheckRoutines(t)
@@ -178,7 +178,7 @@ func TestPeerConnection_SetConfiguration_Go(t *testing.T) {
 	certificate2, err := GenerateCertificate(secretKey2)
 	assert.Nil(t, err)
 
-	for _, test := range []struct {
+	for _, testcase := range []struct {
 		name    string
 		init    func() (*PeerConnection, error)
 		config  Configuration
@@ -266,14 +266,14 @@ func TestPeerConnection_SetConfiguration_Go(t *testing.T) {
 			wantErr: &rtcerr.InvalidAccessError{Err: ErrNoTurnCredentials},
 		},
 	} {
-		pc, err := test.init()
+		pc, err := testcase.init()
 		if err != nil {
-			t.Errorf("SetConfiguration %q: init failed: %v", test.name, err)
+			t.Errorf("SetConfiguration %q: init failed: %v", testcase.name, err)
 		}
 
-		err = pc.SetConfiguration(test.config)
-		if got, want := err, test.wantErr; !reflect.DeepEqual(got, want) {
-			t.Errorf("SetConfiguration %q: err = %v, want %v", test.name, got, want)
+		err = pc.SetConfiguration(testcase.config)
+		if got, want := err, testcase.wantErr; !reflect.DeepEqual(got, want) {
+			t.Errorf("SetConfiguration %q: err = %v, want %v", testcase.name, got, want)
 		}
 
 		assert.NoError(t, pc.Close())
@@ -446,14 +446,7 @@ func TestPeerConnection_AnswerWithClosedConnection(t *testing.T) {
 }
 
 func TestPeerConnection_satisfyTypeAndDirection(t *testing.T) {
-	createTransceiver := func(kind RTPCodecType, direction RTPTransceiverDirection) *RTPTransceiver {
-		r := &RTPTransceiver{kind: kind}
-		r.setDirection(direction)
-
-		return r
-	}
-
-	for _, test := range []struct {
+	for _, testcase := range []struct {
 		name string
 
 		kinds      []RTPCodecType
@@ -466,7 +459,7 @@ func TestPeerConnection_satisfyTypeAndDirection(t *testing.T) {
 			"Audio and Video Transceivers can not satisfy each other",
 			[]RTPCodecType{RTPCodecTypeVideo},
 			[]RTPTransceiverDirection{RTPTransceiverDirectionSendrecv},
-			[]*RTPTransceiver{createTransceiver(RTPCodecTypeAudio, RTPTransceiverDirectionSendrecv)},
+			[]*RTPTransceiver{newRTPTransceiver(nil, nil, RTPTransceiverDirectionSendrecv, RTPCodecTypeAudio)},
 			[]*RTPTransceiver{nil},
 		},
 		{
@@ -488,9 +481,9 @@ func TestPeerConnection_satisfyTypeAndDirection(t *testing.T) {
 			[]RTPCodecType{RTPCodecTypeVideo},
 			[]RTPTransceiverDirection{RTPTransceiverDirectionSendrecv},
 
-			[]*RTPTransceiver{createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionRecvonly)},
+			[]*RTPTransceiver{newRTPTransceiver(nil, nil, RTPTransceiverDirectionRecvonly, RTPCodecTypeVideo)},
 
-			[]*RTPTransceiver{createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionRecvonly)},
+			[]*RTPTransceiver{newRTPTransceiver(nil, nil, RTPTransceiverDirectionRecvonly, RTPCodecTypeVideo)},
 		},
 		{
 			"Don't satisfy a Sendonly with a SendRecv, later SendRecv will be marked as Inactive",
@@ -498,39 +491,39 @@ func TestPeerConnection_satisfyTypeAndDirection(t *testing.T) {
 			[]RTPTransceiverDirection{RTPTransceiverDirectionSendonly, RTPTransceiverDirectionSendrecv},
 
 			[]*RTPTransceiver{
-				createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionSendrecv),
-				createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionRecvonly),
+				newRTPTransceiver(nil, nil, RTPTransceiverDirectionSendrecv, RTPCodecTypeVideo),
+				newRTPTransceiver(nil, nil, RTPTransceiverDirectionRecvonly, RTPCodecTypeVideo),
 			},
 
 			[]*RTPTransceiver{
-				createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionRecvonly),
-				createTransceiver(RTPCodecTypeVideo, RTPTransceiverDirectionSendrecv),
+				newRTPTransceiver(nil, nil, RTPTransceiverDirectionRecvonly, RTPCodecTypeVideo),
+				newRTPTransceiver(nil, nil, RTPTransceiverDirectionSendrecv, RTPCodecTypeVideo),
 			},
 		},
 	} {
-		if len(test.kinds) != len(test.directions) {
+		if len(testcase.kinds) != len(testcase.directions) {
 			t.Fatal("Kinds and Directions must be the same length")
 		}
 
-		got := []*RTPTransceiver{}
-		for i := range test.kinds {
-			res, filteredLocalTransceivers := satisfyTypeAndDirection(test.kinds[i], test.directions[i], test.localTransceivers)
+		var got []*RTPTransceiver
+		for i := range testcase.kinds {
+			res, filteredLocalTransceivers := satisfyTypeAndDirection(testcase.kinds[i], testcase.directions[i], testcase.localTransceivers)
 
 			got = append(got, res)
-			test.localTransceivers = filteredLocalTransceivers
+			testcase.localTransceivers = filteredLocalTransceivers
 		}
 
-		if !reflect.DeepEqual(got, test.want) {
+		if !reflect.DeepEqual(got, testcase.want) {
 			gotStr := ""
 			for _, t := range got {
 				gotStr += fmt.Sprintf("%+v\n", t)
 			}
 
 			wantStr := ""
-			for _, t := range test.want {
+			for _, t := range testcase.want {
 				wantStr += fmt.Sprintf("%+v\n", t)
 			}
-			t.Errorf("satisfyTypeAndDirection %q: \ngot\n%s \nwant\n%s", test.name, gotStr, wantStr)
+			t.Errorf("satisfyTypeAndDirection %q: \ngot\n%s \nwant\n%s", testcase.name, gotStr, wantStr)
 		}
 	}
 }
@@ -722,7 +715,7 @@ func TestPeerConnectionTrickle(t *testing.T) {
 	candidateLock := sync.RWMutex{}
 	var offerCandidateDone, answerCandidateDone bool
 
-	cachedOfferCandidates := []ICECandidateInit{}
+	var cachedOfferCandidates []ICECandidateInit
 	offerPC.OnICECandidate(func(c *ICECandidate) {
 		if offerCandidateDone {
 			t.Error("Received OnICECandidate after finishing gathering")
@@ -737,7 +730,7 @@ func TestPeerConnectionTrickle(t *testing.T) {
 		cachedOfferCandidates = addOrCacheCandidate(answerPC, c, cachedOfferCandidates)
 	})
 
-	cachedAnswerCandidates := []ICECandidateInit{}
+	var cachedAnswerCandidates []ICECandidateInit
 	answerPC.OnICECandidate(func(c *ICECandidate) {
 		if answerCandidateDone {
 			t.Error("Received OnICECandidate after finishing gathering")
@@ -1076,7 +1069,7 @@ func TestPeerConnection_MassiveTracks(t *testing.T) {
 			trackIDs:         make(map[string]struct{}),
 			receivedTrackIDs: make(map[string]struct{}),
 		}
-		tracks          = []*TrackLocalStaticRTP{}
+		tracks          []*TrackLocalStaticRTP
 		trackCount      = 256
 		pingInterval    = 1 * time.Second
 		noiseInterval   = 100 * time.Microsecond
@@ -1259,7 +1252,7 @@ func TestPeerConnection_TransceiverDirection(t *testing.T) {
 		return err
 	}
 
-	for _, test := range []struct {
+	for _, testcase := range []struct {
 		name                  string
 		offerDirection        RTPTransceiverDirection
 		answerStartDirection  RTPTransceiverDirection
@@ -1320,11 +1313,11 @@ func TestPeerConnection_TransceiverDirection(t *testing.T) {
 			[]RTPTransceiverDirection{RTPTransceiverDirectionRecvonly, RTPTransceiverDirectionSendonly},
 		},
 	} {
-		offerDirection := test.offerDirection
-		answerStartDirection := test.answerStartDirection
-		answerFinalDirections := test.answerFinalDirections
+		offerDirection := testcase.offerDirection
+		answerStartDirection := testcase.answerStartDirection
+		answerFinalDirections := testcase.answerFinalDirections
 
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(testcase.name, func(t *testing.T) {
 			pcOffer, pcAnswer, err := newPair()
 			assert.NoError(t, err)
 
@@ -1396,4 +1389,35 @@ func TestPeerConnection_SessionID(t *testing.T) {
 		}
 	}
 	closePairNow(t, pcOffer, pcAnswer)
+}
+
+func TestPeerConnection_SkipStoppedTransceiver(t *testing.T) {
+	defer test.TimeOut(time.Second).Stop()
+
+	pc, err := NewPeerConnection(Configuration{})
+	assert.NoError(t, err)
+
+	track, err := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: "video/vp8"}, "video1", "pion")
+	assert.NoError(t, err)
+
+	transceiver, err := pc.AddTransceiverFromTrack(track)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(pc.GetTransceivers()))
+	assert.NoError(t, pc.RemoveTrack(transceiver.Sender()))
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, transceiver.Stop())
+		}() // no error, no panic
+	}
+	wg.Wait()
+	track, err = NewTrackLocalStaticSample(RTPCodecCapability{MimeType: "video/vp8"}, "video2", "pion")
+	assert.NoError(t, err)
+	_, err = pc.AddTrack(track) // should not use the above stopped transceiver
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(pc.GetTransceivers()))
+
+	assert.NoError(t, pc.Close())
 }

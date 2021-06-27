@@ -11,13 +11,12 @@ import (
 
 // RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
 type RTPTransceiver struct {
-	mid       atomic.Value // string
+	mid       atomic.Value // string; set only once
 	sender    atomic.Value // *RTPSender
 	receiver  atomic.Value // *RTPReceiver
 	direction atomic.Value // RTPTransceiverDirection
-
-	stopped bool
-	kind    RTPCodecType
+	stopped   atomicBool
+	kind      RTPCodecType
 }
 
 func newRTPTransceiver(
@@ -90,20 +89,25 @@ func (t *RTPTransceiver) Direction() RTPTransceiverDirection {
 
 // Stop irreversibly stops the RTPTransceiver
 func (t *RTPTransceiver) Stop() error {
-	if t.Sender() != nil {
-		if err := t.Sender().Stop(); err != nil {
-			return err
+	if t.stopped.compareAndSwap(false, true) {
+		if sender := t.Sender(); sender != nil {
+			if err := sender.Stop(); err != nil {
+				return err
+			}
 		}
-	}
-	if t.Receiver() != nil {
-		if err := t.Receiver().Stop(); err != nil {
-			return err
+		if receiver := t.Receiver(); receiver != nil {
+			if err := receiver.Stop(); err != nil {
+				return err
+			}
 		}
-	}
 
-	t.setDirection(RTPTransceiverDirectionInactive)
+		t.setDirection(RTPTransceiverDirectionInactive)
+	}
 	return nil
 }
+
+// Stopped indicates whether or not RTPTransceiver has been stopped
+func (t *RTPTransceiver) Stopped() bool { return t.stopped.get() }
 
 func (t *RTPTransceiver) setReceiver(r *RTPReceiver) {
 	t.receiver.Store(r)

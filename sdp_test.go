@@ -363,8 +363,7 @@ func TestMediaDescriptionFingerprints(t *testing.T) {
 
 func TestPopulateSDP(t *testing.T) {
 	t.Run("Rid", func(t *testing.T) {
-		tr := &RTPTransceiver{kind: RTPCodecTypeVideo}
-		tr.setDirection(RTPTransceiverDirectionRecvonly)
+		tr := newRTPTransceiver(nil, nil, RTPTransceiverDirectionRecvonly, RTPCodecTypeVideo)
 		ridMap := map[string]string{
 			"ridkey": "some",
 		}

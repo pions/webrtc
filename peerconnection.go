@@ -371,15 +371,15 @@ func (pc *PeerConnection) checkNegotiationNeeded() bool { //nolint:gocognit
 	for _, t := range pc.rtpTransceivers {
 		// https://www.w3.org/TR/webrtc/#dfn-update-the-negotiation-needed-flag
 		// Step 5.1
-		// if t.stopping && !t.stopped {
+		// if t.stopping && !t.Stopped() {
 		// 	return true
 		// }
 		m := getByMid(t.Mid(), localDesc)
 		// Step 5.2
-		if !t.stopped && m == nil {
+		if !t.Stopped() && m == nil {
 			return true
 		}
-		if !t.stopped && m != nil {
+		if !t.Stopped() && m != nil {
 			// Step 5.3.1
 			if t.Direction() == RTPTransceiverDirectionSendrecv || t.Direction() == RTPTransceiverDirectionSendonly {
 				descMsid, okMsid := m.Attribute(sdp.AttrKeyMsid)
@@ -408,7 +408,7 @@ func (pc *PeerConnection) checkNegotiationNeeded() bool { //nolint:gocognit
 			}
 		}
 		// Step 5.4
-		if t.stopped && t.Mid() != "" {
+		if t.Stopped() && t.Mid() != "" {
 			if getByMid(t.Mid(), localDesc) != nil || getByMid(t.Mid(), remoteDesc) != nil {
 				return true
 			}
@@ -1235,7 +1235,7 @@ func (pc *PeerConnection) startRTPReceivers(incomingTracks []trackDetails, curre
 				continue
 			}
 
-			if (incomingTrack.kind != t.kind) ||
+			if (incomingTrack.kind != t.Kind()) ||
 				(t.Direction() != RTPTransceiverDirectionRecvonly && t.Direction() != RTPTransceiverDirectionSendrecv) ||
 				(t.Receiver()) == nil ||
 				(t.Receiver().haveReceived()) {
@@ -1563,7 +1563,7 @@ func (pc *PeerConnection) AddTrack(track TrackLocal) (*RTPSender, error) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	for _, t := range pc.rtpTransceivers {
-		if !t.stopped && t.kind == track.Kind() && t.Sender() == nil {
+		if !t.Stopped() && t.Kind() == track.Kind() && t.Sender() == nil {
 			sender, err := pc.api.NewRTPSender(track, pc.dtlsTransport)
 			if err == nil {
 				err = t.SetSender(sender, track)
@@ -1824,7 +1824,7 @@ func (pc *PeerConnection) Close() error {
 	// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close (step #4)
 	pc.mu.Lock()
 	for _, t := range pc.rtpTransceivers {
-		if !t.stopped {
+		if !t.Stopped() {
 			closeErrs = append(closeErrs, t.Stop())
 		}
 	}
@@ -2106,9 +2106,9 @@ func (pc *PeerConnection) generateUnmatchedSDP(transceivers []*RTPTransceiver, u
 		audio := make([]*RTPTransceiver, 0)
 
 		for _, t := range transceivers {
-			if t.kind == RTPCodecTypeVideo {
+			if t.Kind() == RTPCodecTypeVideo {
 				video = append(video, t)
-			} else if t.kind == RTPCodecTypeAudio {
+			} else if t.Kind() == RTPCodecTypeAudio {
 				audio = append(audio, t)
 			}
 			if t.Sender() != nil {
@@ -2208,14 +2208,13 @@ func (pc *PeerConnection) generateMatchedSDP(transceivers []*RTPTransceiver, use
 				t, localTransceivers = satisfyTypeAndDirection(kind, direction, localTransceivers)
 				if t == nil {
 					if len(mediaTransceivers) == 0 {
-						t = &RTPTransceiver{kind: kind}
-						t.setDirection(RTPTransceiverDirectionInactive)
+						t = newRTPTransceiver(nil, nil, RTPTransceiverDirectionInactive, kind)
 						mediaTransceivers = append(mediaTransceivers, t)
 					}
 					break
 				}
-				if t.Sender() != nil {
-					t.Sender().setNegotiated()
+				if sender := t.Sender(); sender != nil {
+					sender.setNegotiated()
 				}
 				mediaTransceivers = append(mediaTransceivers, t)
 			}
@@ -2228,8 +2227,8 @@ func (pc *PeerConnection) generateMatchedSDP(transceivers []*RTPTransceiver, use
 			if t == nil {
 				return nil, fmt.Errorf("%w: %q", errPeerConnTranscieverMidNil, midValue)
 			}
-			if t.Sender() != nil {
-				t.Sender().setNegotiated()
+			if sender := t.Sender(); sender != nil {
+				sender.setNegotiated()
 			}
 			mediaTransceivers := []*RTPTransceiver{t}
 			mediaSections = append(mediaSections, mediaSection{id: midValue, transceivers: mediaTransceivers, ridMap: getRids(media)})
@@ -2240,8 +2239,8 @@ func (pc *PeerConnection) generateMatchedSDP(transceivers []*RTPTransceiver, use
 	if includeUnmatched {
 		if !detectedPlanB {
 			for _, t := range localTransceivers {
-				if t.Sender() != nil {
-					t.Sender().setNegotiated()
+				if sender := t.Sender(); sender != nil {
+					sender.setNegotiated()
 				}
 				mediaSections = append(mediaSections, mediaSection{id: t.Mid(), transceivers: []*RTPTransceiver{t}})
 			}
