@@ -588,7 +588,9 @@ func payloaderForCodec(codec RTPCodecCapability) (rtp.Payloader, error) {
 	case strings.ToLower(MimeTypeOpus):
 		return &codecs.OpusPayloader{}, nil
 	case strings.ToLower(MimeTypeVP8):
-		return &codecs.VP8Payloader{}, nil
+		return &codecs.VP8Payloader{
+			EnablePictureID: true,
+		}, nil
 	case strings.ToLower(MimeTypeVP9):
 		return &codecs.VP9Payloader{}, nil
 	case strings.ToLower(MimeTypeG722):
