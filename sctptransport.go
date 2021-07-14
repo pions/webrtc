@@ -6,9 +6,11 @@ import (
 	"io"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/datachannel"
+	"github.com/pion/dtls/v2"
 	"github.com/pion/logging"
 	"github.com/pion/sctp"
 	"github.com/pion/webrtc/v3/pkg/rtcerr"
@@ -28,6 +30,8 @@ type SCTPTransport struct {
 	// SCTPTransportState doesn't have an enum to distinguish between New/Connecting
 	// so we need a dedicated field
 	isStarted bool
+
+	isAcceptLoopRunning uint32 // Used as a bool
 
 	// MaxMessageSize represents the maximum size of data that can be passed to
 	// DataChannel's send() method.
@@ -115,7 +119,45 @@ func (r *SCTPTransport) Start(remoteCaps SCTPCapabilities) error {
 	r.sctpAssociation = sctpAssociation
 	r.state = SCTPTransportStateConnected
 
-	go r.acceptDataChannels(sctpAssociation)
+	go r.acceptDataChannels()
+
+	return nil
+}
+
+// Caller must hold lock
+func (r *SCTPTransport) restart(dtlsConn *dtls.Conn) error {
+	sctpAssociation, err := sctp.Client(sctp.Config{
+		NetConn:       dtlsConn,
+		LoggerFactory: r.api.settingEngine.LoggerFactory,
+	})
+	if err != nil {
+		return err
+	}
+
+	r.sctpAssociation = sctpAssociation
+
+	// Snapshots the DataChannels to process them asynchronously, safely.
+	// If a DataChannel is closed, it was most likely closed because of the
+	// reconnection & needs to be restarted.
+	dataChannelsCpy := make([]*DataChannel, len(r.dataChannels))
+	copy(dataChannelsCpy, r.dataChannels)
+
+	go func(dataChannels []*DataChannel) {
+		for _, d := range dataChannels {
+			if d.ReadyState() == DataChannelStateClosed {
+				err := d.open(r, true)
+				if err != nil {
+					r.log.Warnf("failed to re-open data channel: %s", err)
+					continue
+				}
+			}
+		}
+	}(dataChannelsCpy)
+
+	if swapped := atomic.CompareAndSwapUint32(&r.isAcceptLoopRunning, 0, 1); swapped {
+		// AcceptLoop wasn't running, restart it
+		go r.acceptDataChannels()
+	}
 
 	return nil
 }
@@ -138,13 +180,32 @@ func (r *SCTPTransport) Stop() error {
 	return nil
 }
 
-func (r *SCTPTransport) acceptDataChannels(a *sctp.Association) {
+func (r *SCTPTransport) acceptDataChannels() {
+	atomic.StoreUint32(&r.isAcceptLoopRunning, 1)
+	defer atomic.StoreUint32(&r.isAcceptLoopRunning, 0)
+
 	for {
+		r.lock.RLock()
+		a := r.sctpAssociation
+		r.lock.RUnlock()
+
 		dc, err := datachannel.Accept(a, &datachannel.Config{
 			LoggerFactory: r.api.settingEngine.LoggerFactory,
 		})
 		if err != nil {
 			if err != io.EOF {
+				r.lock.RLock()
+				didRestart := r.sctpAssociation != a
+				r.lock.RUnlock()
+				if didRestart {
+					// During a restart, `Accept` will return an `EOF`.
+					// If the association is different, it means the SCTPTransport just
+					// performed a `restart`. In that case, just keep looping.
+					//
+					// This is safe since restarts are performed holding the `lock`.
+					continue
+				}
+
 				r.log.Errorf("Failed to accept data channel: %v", err)
 				r.onError(err)
 			}

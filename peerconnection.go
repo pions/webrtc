@@ -1112,7 +1112,59 @@ func (pc *PeerConnection) SetRemoteDescription(desc SessionDescription) error { 
 			pc.ops.Enqueue(func() {
 				pc.startRTP(true, &desc, currentTransceivers)
 			})
+		} else if pc.dtlsTransport.State() != DTLSTransportStateNew {
+			fingerprint, fingerprintHash, fErr := extractFingerprint(desc.parsed)
+			if fErr != nil {
+				return fErr
+			}
+
+			fingerPrintDidChange := true
+
+			for _, fp := range pc.dtlsTransport.remoteParameters.Fingerprints {
+				if fingerprint == fp.Value && fingerprintHash == fp.Algorithm {
+					fingerPrintDidChange = false
+					break
+				}
+			}
+
+			if fingerPrintDidChange {
+				pc.ops.Enqueue(func() {
+					// SCTP uses DTLS, so prevent any use, by locking, while
+					// DTLS is restarting.
+					pc.sctpTransport.lock.Lock()
+					defer pc.sctpTransport.lock.Unlock()
+
+					if dErr := pc.dtlsTransport.Stop(); dErr != nil {
+						pc.log.Warnf("Failed to stop DTLS: %s", dErr)
+					}
+
+					// libwebrtc switches the connection back to `new`.
+					pc.dtlsTransport.lock.Lock()
+					pc.dtlsTransport.onStateChange(DTLSTransportStateNew)
+					pc.dtlsTransport.lock.Unlock()
+
+					// Restart the dtls transport with updated fingerprints
+					err = pc.dtlsTransport.Start(DTLSParameters{
+						Role:         dtlsRoleFromRemoteSDP(desc.parsed),
+						Fingerprints: []DTLSFingerprint{{Algorithm: fingerprintHash, Value: fingerprint}},
+					})
+					pc.updateConnectionState(pc.ICEConnectionState(), pc.dtlsTransport.State())
+					if err != nil {
+						pc.log.Warnf("Failed to restart DTLS: %s", err)
+						return
+					}
+
+					// If SCTP was enabled, restart it with the new DTLS transport.
+					if pc.sctpTransport.isStarted {
+						if dErr := pc.sctpTransport.restart(pc.dtlsTransport.conn); dErr != nil {
+							pc.log.Warnf("Failed to restart SCTP: %s", dErr)
+							return
+						}
+					}
+				})
+			}
 		}
+
 		return nil
 	}
 
@@ -1307,7 +1359,7 @@ func (pc *PeerConnection) startSCTP() {
 	var openedDCCount uint32
 	for _, d := range dataChannels {
 		if d.ReadyState() == DataChannelStateConnecting {
-			err := d.open(pc.sctpTransport)
+			err := d.open(pc.sctpTransport, false)
 			if err != nil {
 				pc.log.Warnf("failed to open data channel: %s", err)
 				continue
@@ -1765,7 +1817,7 @@ func (pc *PeerConnection) CreateDataChannel(label string, options *DataChannelIn
 
 	// If SCTP already connected open all the channels
 	if pc.sctpTransport.State() == SCTPTransportStateConnected {
-		if err = d.open(pc.sctpTransport); err != nil {
+		if err = d.open(pc.sctpTransport, false); err != nil {
 			return nil, err
 		}
 	}

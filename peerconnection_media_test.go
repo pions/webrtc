@@ -1052,3 +1052,285 @@ func TestPeerConnection_RaceReplaceTrack(t *testing.T) {
 
 	assert.NoError(t, pc.Close())
 }
+
+// Issue #1636
+func TestPeerConnection_DTLS_Restart_MediaAndDataChannel(t *testing.T) {
+	lim := test.TimeOut(time.Second * 30)
+	defer lim.Stop()
+
+	makeClient := func() (*PeerConnection, *TrackLocalStaticSample, *DataChannel, <-chan string) {
+		pc, cliErr := NewPeerConnection(Configuration{})
+		assert.NoError(t, cliErr)
+
+		track, cliErr := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeOpus}, "audio", "test-client")
+		assert.NoError(t, cliErr)
+
+		dc, cliErr := pc.CreateDataChannel("data", nil)
+		assert.NoError(t, cliErr)
+
+		dataChannelMessages := make(chan string, 1)
+		pc.OnDataChannel(func(channel *DataChannel) {
+			channel.OnMessage(func(msg DataChannelMessage) {
+				fmt.Printf("received %v\n", string(msg.Data))
+				dataChannelMessages <- string(msg.Data)
+			})
+		})
+
+		_, cliErr = pc.AddTrack(track)
+		assert.NoError(t, cliErr)
+
+		return pc, track, dc, dataChannelMessages
+	}
+
+	pcA1, _, _, msgsA1 := makeClient()
+	defer func() { _ = pcA1.Close() }()
+	pcA2, _, _, msgsA2 := makeClient()
+	defer func() { _ = pcA2.Close() }()
+	pcB, outputTrackB, dataChannelB, _ := makeClient()
+	defer func() { _ = pcB.Close() }()
+
+	triggerMedia := func() {
+		assert.NoError(t, outputTrackB.WriteSample(media.Sample{
+			Data:      []byte{0xbb},
+			Timestamp: time.Now(),
+			Duration:  20 * time.Millisecond,
+		}))
+		// Somehow, if we only send 1 packet, the OnTrack event is never fired.
+		time.Sleep(20 * time.Millisecond)
+		assert.NoError(t, outputTrackB.WriteSample(media.Sample{
+			Data:      []byte{0xbb},
+			Timestamp: time.Now(),
+			Duration:  20 * time.Millisecond,
+		}))
+	}
+
+	gatherCompletePromiseA1 := GatheringCompletePromise(pcA1)
+	offerA1, err := pcA1.CreateOffer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcA1.SetLocalDescription(offerA1))
+	<-gatherCompletePromiseA1
+
+	assert.NoError(t, pcB.SetRemoteDescription(*pcA1.LocalDescription()))
+
+	gatherCompletePromiseB := GatheringCompletePromise(pcB)
+	answerB, err := pcB.CreateAnswer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcB.SetLocalDescription(answerB))
+	<-gatherCompletePromiseB
+
+	pcA1Connected := make(chan struct{}, 1)
+	pcA1.OnICEConnectionStateChange(func(s ICEConnectionState) {
+		if s == ICEConnectionStateConnected {
+			pcA1Connected <- struct{}{}
+		}
+	})
+
+	incomingTracksA1 := make(chan *TrackRemote, 1)
+	pcA1.OnTrack(func(remote *TrackRemote, receiver *RTPReceiver) {
+		incomingTracksA1 <- remote
+	})
+
+	assert.NoError(t, pcA1.SetRemoteDescription(answerB))
+
+	<-pcA1Connected
+
+	triggerMedia()
+	assert.NoError(t, dataChannelB.SendText("HelloWorld"))
+
+	incomingTrackA1 := <-incomingTracksA1
+
+	pkt, _, err := incomingTrackA1.ReadRTP()
+	assert.NotNil(t, pkt)
+	assert.NoError(t, err)
+
+	<-msgsA1
+	assert.Empty(t, msgsA1)
+
+	// ClientA2 connects to ClientB
+
+	gatherCompletePromiseA2 := GatheringCompletePromise(pcA2)
+	// We can't do an ICE Restart here, since it's a different PeerConnection
+	offerA2, err := pcA2.CreateOffer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcA2.SetLocalDescription(offerA2))
+	<-gatherCompletePromiseA2
+
+	assert.NoError(t, pcB.SetRemoteDescription(*pcA2.LocalDescription()))
+
+	gatherCompletePromiseB = GatheringCompletePromise(pcB)
+	answerB, err = pcB.CreateAnswer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcB.SetLocalDescription(answerB))
+	<-gatherCompletePromiseB
+
+	pcA2Connected := make(chan struct{}, 1)
+	pcA2.OnICEConnectionStateChange(func(s ICEConnectionState) {
+		if s == ICEConnectionStateConnected {
+			pcA2Connected <- struct{}{}
+		}
+	})
+
+	incomingTracksA2 := make(chan *TrackRemote, 1)
+	pcA2.OnTrack(func(remote *TrackRemote, receiver *RTPReceiver) {
+		incomingTracksA2 <- remote
+	})
+
+	assert.NoError(t, pcA2.SetRemoteDescription(answerB))
+
+	// Wait for connection
+	<-pcA2Connected
+
+	triggerMedia()
+	assert.NoError(t, dataChannelB.SendText("HelloWorld"))
+
+	// Make sure A1 doesn't receive anything
+	assert.Empty(t, incomingTracksA1)
+	assert.NoError(t, incomingTrackA1.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	pkt, _, err = incomingTrackA1.ReadRTP()
+	assert.Nil(t, pkt)
+	assert.Error(t, err)
+
+	// Needed in case of `-race`??
+	triggerMedia()
+
+	// Make sure A2 receives media
+	incomingTrackA2 := <-incomingTracksA2
+	pkt, _, err = incomingTrackA2.ReadRTP()
+	assert.NotNil(t, pkt)
+	assert.NoError(t, err)
+
+	<-msgsA2
+	assert.Empty(t, msgsA2)
+	assert.Empty(t, msgsA1)
+}
+
+// Issue #1636
+func TestPeerConnection_DTLS_Restart_MediaOnly(t *testing.T) {
+	lim := test.TimeOut(time.Second * 30)
+	defer lim.Stop()
+
+	makeClient := func() (*PeerConnection, *TrackLocalStaticSample) {
+		pc, cliErr := NewPeerConnection(Configuration{})
+		assert.NoError(t, cliErr)
+
+		track, cliErr := NewTrackLocalStaticSample(RTPCodecCapability{MimeType: MimeTypeOpus}, "audio", "test-client")
+		assert.NoError(t, cliErr)
+
+		_, cliErr = pc.AddTrack(track)
+		assert.NoError(t, cliErr)
+
+		return pc, track
+	}
+
+	pcA1, _ := makeClient()
+	defer func() { _ = pcA1.Close() }()
+	pcA2, _ := makeClient()
+	defer func() { _ = pcA2.Close() }()
+	pcB, outputTrackB := makeClient()
+	defer func() { _ = pcB.Close() }()
+
+	triggerMedia := func() {
+		assert.NoError(t, outputTrackB.WriteSample(media.Sample{
+			Data:      []byte{0xbb},
+			Timestamp: time.Now(),
+			Duration:  20 * time.Millisecond,
+		}))
+		// Somehow, if we only send 1 packet, the OnTrack event is never fired.
+		time.Sleep(20 * time.Millisecond)
+		assert.NoError(t, outputTrackB.WriteSample(media.Sample{
+			Data:      []byte{0xbb},
+			Timestamp: time.Now(),
+			Duration:  20 * time.Millisecond,
+		}))
+	}
+
+	gatherCompletePromiseA1 := GatheringCompletePromise(pcA1)
+	offerA1, err := pcA1.CreateOffer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcA1.SetLocalDescription(offerA1))
+	<-gatherCompletePromiseA1
+
+	assert.NoError(t, pcB.SetRemoteDescription(*pcA1.LocalDescription()))
+
+	gatherCompletePromiseB := GatheringCompletePromise(pcB)
+	answerB, err := pcB.CreateAnswer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcB.SetLocalDescription(answerB))
+	<-gatherCompletePromiseB
+
+	pcA1Connected := make(chan struct{}, 1)
+	pcA1.OnICEConnectionStateChange(func(s ICEConnectionState) {
+		if s == ICEConnectionStateConnected {
+			pcA1Connected <- struct{}{}
+		}
+	})
+
+	incomingTracksA1 := make(chan *TrackRemote, 1)
+	pcA1.OnTrack(func(remote *TrackRemote, receiver *RTPReceiver) {
+		incomingTracksA1 <- remote
+	})
+
+	assert.NoError(t, pcA1.SetRemoteDescription(answerB))
+
+	<-pcA1Connected
+
+	triggerMedia()
+
+	incomingTrackA1 := <-incomingTracksA1
+
+	pkt, _, err := incomingTrackA1.ReadRTP()
+	assert.NotNil(t, pkt)
+	assert.NoError(t, err)
+
+	// ClientA2 connects to ClientB
+
+	gatherCompletePromiseA2 := GatheringCompletePromise(pcA2)
+	// We can't do an ICE Restart here, since it's a different PeerConnection
+	offerA2, err := pcA2.CreateOffer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcA2.SetLocalDescription(offerA2))
+	<-gatherCompletePromiseA2
+
+	assert.NoError(t, pcB.SetRemoteDescription(*pcA2.LocalDescription()))
+
+	gatherCompletePromiseB = GatheringCompletePromise(pcB)
+	answerB, err = pcB.CreateAnswer(nil)
+	assert.NoError(t, err)
+	assert.NoError(t, pcB.SetLocalDescription(answerB))
+	<-gatherCompletePromiseB
+
+	pcA2Connected := make(chan struct{}, 1)
+	pcA2.OnICEConnectionStateChange(func(s ICEConnectionState) {
+		if s == ICEConnectionStateConnected {
+			pcA2Connected <- struct{}{}
+		}
+	})
+
+	incomingTracksA2 := make(chan *TrackRemote, 1)
+	pcA2.OnTrack(func(remote *TrackRemote, receiver *RTPReceiver) {
+		incomingTracksA2 <- remote
+	})
+
+	assert.NoError(t, pcA2.SetRemoteDescription(answerB))
+
+	// Wait for connection
+	<-pcA2Connected
+
+	triggerMedia()
+
+	// Make sure A1 doesn't receive anything
+	assert.Empty(t, incomingTracksA1)
+	assert.NoError(t, incomingTrackA1.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+	pkt, _, err = incomingTrackA1.ReadRTP()
+	assert.Nil(t, pkt)
+	assert.Error(t, err)
+
+	// This is needed in case of `-race`, somehow...
+	triggerMedia()
+
+	// Make sure A2 receives media
+	incomingTrackA2 := <-incomingTracksA2
+	pkt, _, err = incomingTrackA2.ReadRTP()
+	assert.NotNil(t, pkt)
+	assert.NoError(t, err)
+}

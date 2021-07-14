@@ -69,7 +69,7 @@ func (api *API) NewDataChannel(transport *SCTPTransport, params *DataChannelPara
 		return nil, err
 	}
 
-	err = d.open(transport)
+	err = d.open(transport, false)
 	if err != nil {
 		return nil, err
 	}
@@ -103,14 +103,14 @@ func (api *API) newDataChannel(params *DataChannelParameters, log logging.Levele
 }
 
 // open opens the datachannel over the sctp transport
-func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
+func (d *DataChannel) open(sctpTransport *SCTPTransport, restart bool) error {
 	association := sctpTransport.association()
 	if association == nil {
 		return errSCTPNotEstablished
 	}
 
 	d.mu.Lock()
-	if d.sctpTransport != nil { // already open
+	if d.sctpTransport != nil && !restart { // already open & not restarting
 		d.mu.Unlock()
 		return nil
 	}
@@ -162,6 +162,11 @@ func (d *DataChannel) open(sctpTransport *SCTPTransport) error {
 	if err != nil {
 		d.mu.Unlock()
 		return err
+	}
+
+	// If restarting, the `Open` event should be triggered again, once.
+	if restart {
+		d.openHandlerOnce = sync.Once{}
 	}
 
 	// bufferedAmountLowThreshold and onBufferedAmountLow might be set earlier
@@ -309,11 +314,18 @@ func (d *DataChannel) readLoop() {
 		n, isString, err := d.dataChannel.ReadDataChannel(buffer)
 		if err != nil {
 			rlBufPool.Put(buffer) // nolint:staticcheck
+
+			previousState := d.ReadyState()
 			d.setReadyState(DataChannelStateClosed)
+
 			if err != io.EOF {
 				d.onError(err)
 			}
-			d.onClose()
+
+			// https://www.w3.org/TR/webrtc/#announcing-a-data-channel-as-closed
+			if previousState != DataChannelStateClosed {
+				d.onClose()
+			}
 			return
 		}
 

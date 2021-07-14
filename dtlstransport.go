@@ -213,6 +213,31 @@ func (t *DTLSTransport) startSRTP() error {
 		return fmt.Errorf("%w: %v", errDtlsKeyExtractionFailed, err)
 	}
 
+	isAlreadyRunning := func() bool {
+		select {
+		case <-t.srtpReady:
+			return true
+		default:
+			return false
+		}
+	}()
+
+	if isAlreadyRunning {
+		if sess, ok := t.srtpSession.Load().(*srtp.SessionSRTP); ok {
+			if updateErr := sess.UpdateContext(srtpConfig); updateErr != nil {
+				return updateErr
+			}
+		}
+
+		if sess, ok := t.srtcpSession.Load().(*srtp.SessionSRTCP); ok {
+			if updateErr := sess.UpdateContext(srtpConfig); updateErr != nil {
+				return updateErr
+			}
+		}
+
+		return nil
+	}
+
 	srtpSession, err := srtp.NewSessionSRTP(t.srtpEndpoint, srtpConfig)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errFailedToStartSRTP, err)
