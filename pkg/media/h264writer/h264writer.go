@@ -82,15 +82,22 @@ func (h *H264Writer) Close() error {
 
 func isKeyFrame(data []byte) bool {
 	const typeSTAPA = 24
+	const typeSPS = 7
 
 	var word uint32
 
 	payload := bytes.NewReader(data)
 	err := binary.Read(payload, binary.BigEndian, &word)
 
-	if err != nil || (word&0x1F000000)>>24 != typeSTAPA {
+	if err != nil {
 		return false
 	}
 
-	return word&0x1F == 7
+	if (word&0x1F000000)>>24 == typeSTAPA && (word&0x0000001F) == typeSPS {
+		return true
+	} else if (word&0x1F000000)>>24 == typeSPS {
+		return true
+	}
+
+	return false
 }
