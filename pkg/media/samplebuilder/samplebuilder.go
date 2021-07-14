@@ -22,8 +22,11 @@ type SampleBuilder struct {
 	// sampleRate allows us to compute duration of media.SamplecA
 	sampleRate uint32
 
-	// Interface that checks whether the packet is the first fragment of the frame or not
+	// determines whether the packet is the first fragment of the frame
 	partitionHeadChecker rtp.PartitionHeadChecker
+
+	// determines whether the packet is the last fragment of a frame
+	partitionTailChecker func(*rtp.Packet) bool
 
 	// the handler to be called when the builder is about to remove the
 	// reference to some packet.
@@ -204,7 +207,7 @@ func (s *SampleBuilder) buildSample(purgingBuffers bool) *media.Sample {
 	var consume sampleSequenceLocation
 
 	for i := s.active.head; s.buffer[i] != nil && s.active.compare(i) != slCompareAfter; i++ {
-		if s.depacketizer.IsDetectedFinalPacketInSequence(s.buffer[i].Marker) {
+		if s.partitionTailChecker != nil && s.partitionTailChecker(s.buffer[i]) {
 			consume.head = s.active.head
 			consume.tail = i + 1
 			break
@@ -334,6 +337,19 @@ type Option func(o *SampleBuilder)
 func WithPartitionHeadChecker(checker rtp.PartitionHeadChecker) Option {
 	return func(o *SampleBuilder) {
 		o.partitionHeadChecker = checker
+	}
+}
+
+// WithPartitionTailChecker assigns a codec-specific PartitionTailChecker.
+// For most audio codecs, this should just be
+//    func(p *rtp.Packet) bool { return true; }
+// For most video codecs, this should be
+//    func(p *rtp.Packet) bool { return p.Marker; }
+// It is always correct to return false, but it might cause one extra
+// packet to be buffered.
+func WithPartitionTailChecker(checker func(*rtp.Packet) bool) Option {
+	return func(s *SampleBuilder) {
+		s.partitionTailChecker = checker
 	}
 }
 

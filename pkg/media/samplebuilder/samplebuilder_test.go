@@ -13,8 +13,8 @@ import (
 type sampleBuilderTest struct {
 	message          string
 	packets          []*rtp.Packet
-	withHeadChecker  bool
 	headBytes        []byte
+	tailChecker      func(*rtp.Packet) bool
 	samples          []*media.Sample
 	maxLate          uint16
 	maxLateTimestamp uint32
@@ -43,6 +43,10 @@ func (f *fakePartitionHeadChecker) IsPartitionHead(payload []byte) bool {
 	return false
 }
 
+func fakeTailChecker(p *rtp.Packet) bool {
+	return p.Marker
+}
+
 func TestSampleBuilder(t *testing.T) {
 	testData := []sampleBuilderTest{
 		{
@@ -53,6 +57,7 @@ func TestSampleBuilder(t *testing.T) {
 			samples:          []*media.Sample{},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder shouldn't emit anything if only one RTP packet has been pushed even if the market bit is set",
@@ -62,6 +67,7 @@ func TestSampleBuilder(t *testing.T) {
 			samples:          []*media.Sample{},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should emit two packets, we had three packets with unique timestamps",
@@ -76,6 +82,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should emit one packet, we had a packet end of sequence marker and run out of space",
@@ -93,6 +100,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 			maxLate:          5,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder shouldn't emit any packet, we do not have a valid end of sequence and run out of space",
@@ -108,6 +116,7 @@ func TestSampleBuilder(t *testing.T) {
 			samples:          []*media.Sample{},
 			maxLate:          5,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should emit one packet, we had a packet end of sequence marker and run out of space",
@@ -126,6 +135,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 			maxLate:          5,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should emit one packet, we had two packets but two with duplicate timestamps",
@@ -141,6 +151,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder shouldn't emit a packet because we have a gap before a valid one",
@@ -152,6 +163,7 @@ func TestSampleBuilder(t *testing.T) {
 			samples:          []*media.Sample{},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder shouldn't emit a packet after a gap as there are gaps and have not reached maxLate yet",
@@ -160,11 +172,11 @@ func TestSampleBuilder(t *testing.T) {
 				{Header: rtp.Header{SequenceNumber: 5007, Timestamp: 6}, Payload: []byte{0x02}},
 				{Header: rtp.Header{SequenceNumber: 5008, Timestamp: 7}, Payload: []byte{0x03}},
 			},
-			withHeadChecker:  true,
 			headBytes:        []byte{0x02},
 			samples:          []*media.Sample{},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder shouldn't emit a packet after a gap if PartitionHeadChecker doesn't assume it head",
@@ -173,11 +185,11 @@ func TestSampleBuilder(t *testing.T) {
 				{Header: rtp.Header{SequenceNumber: 5007, Timestamp: 6}, Payload: []byte{0x02}},
 				{Header: rtp.Header{SequenceNumber: 5008, Timestamp: 7}, Payload: []byte{0x03}},
 			},
-			withHeadChecker:  true,
 			headBytes:        []byte{},
 			samples:          []*media.Sample{},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should emit multiple valid packets",
@@ -198,6 +210,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 			maxLate:          50,
 			maxLateTimestamp: 0,
+			tailChecker:      fakeTailChecker,
 		},
 		{
 			message: "SampleBuilder should skip time stamps too old",
@@ -214,10 +227,10 @@ func TestSampleBuilder(t *testing.T) {
 			samples: []*media.Sample{
 				{Data: []byte{0x04, 0x05}, Duration: time.Second * time.Duration(2), PacketTimestamp: 4000, PrevDroppedPackets: 13},
 			},
-			withHeadChecker:  true,
 			headBytes:        []byte{0x04},
 			maxLate:          50,
 			maxLateTimestamp: 2000,
+			tailChecker:      fakeTailChecker,
 		},
 	}
 
@@ -226,9 +239,14 @@ func TestSampleBuilder(t *testing.T) {
 
 		for _, t := range testData {
 			var opts []Option
-			if t.withHeadChecker {
+			if len(t.headBytes) > 0 {
 				opts = append(opts, WithPartitionHeadChecker(
 					&fakePartitionHeadChecker{headBytes: t.headBytes},
+				))
+			}
+			if t.tailChecker != nil {
+				opts = append(opts, WithPartitionTailChecker(
+					t.tailChecker,
 				))
 			}
 			if t.maxLateTimestamp != 0 {
@@ -333,9 +351,14 @@ func TestSampleBuilderPushMaxZero(t *testing.T) {
 	pkts := []rtp.Packet{
 		{Header: rtp.Header{SequenceNumber: 0, Timestamp: 0, Marker: true}, Payload: []byte{0x01}},
 	}
-	s := New(0, &fakeDepacketizer{}, 1, WithPartitionHeadChecker(
-		&fakePartitionHeadChecker{headBytes: []byte{0x01}},
-	))
+	s := New(0, &fakeDepacketizer{}, 1,
+		WithPartitionHeadChecker(
+			&fakePartitionHeadChecker{headBytes: []byte{0x01}},
+		),
+		WithPartitionTailChecker(
+			fakeTailChecker,
+		),
+	)
 	s.Push(&pkts[0])
 	if sample := s.Pop(); sample == nil {
 		t.Error("Should expect a popped sample")
