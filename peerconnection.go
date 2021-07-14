@@ -1036,6 +1036,26 @@ func (pc *PeerConnection) SetRemoteDescription(desc SessionDescription) error { 
 			}
 
 			t, localTransceivers = findByMid(midValue, localTransceivers)
+			if t != nil && t.Receiver() != nil && len(t.Receiver().Tracks()) > 1 {
+				switch direction {
+				case RTPTransceiverDirectionInactive:
+					if err := t.Stop(); err != nil {
+						return err
+					}
+				case RTPTransceiverDirectionRecvonly:
+					if err := t.Receiver().Stop(); err != nil {
+						return err
+					}
+				case RTPTransceiverDirectionSendonly, RTPTransceiverDirectionSendrecv:
+					t.setDirection(RTPTransceiverDirectionRecvonly)
+					receiver, err := pc.api.NewRTPReceiver(kind, pc.dtlsTransport)
+					if err != nil {
+						return err
+					}
+					t.setReceiver(receiver)
+				}
+				continue
+			}
 			if t == nil {
 				t, localTransceivers = satisfyTypeAndDirection(kind, direction, localTransceivers)
 			} else if direction == RTPTransceiverDirectionInactive {
@@ -2046,7 +2066,6 @@ func (pc *PeerConnection) startRTP(isRenegotiation bool, remoteDesc *SessionDesc
 			}
 
 			t.Receiver().Track().mu.Unlock()
-
 			if err := t.Receiver().Stop(); err != nil {
 				pc.log.Warnf("Failed to stop RtpReceiver: %s", err)
 				continue
