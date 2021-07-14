@@ -13,11 +13,18 @@ import (
 
 	"github.com/pion/datachannel"
 	"github.com/pion/logging"
+	"github.com/pion/sctp"
 	"github.com/pion/webrtc/v3/pkg/rtcerr"
 )
 
 const dataChannelBufferSize = math.MaxUint16 // message size limit for Chromium
 var errSCTPNotEstablished = errors.New("SCTP not established")
+
+// DataChannelMessageConfig Provides configurations for the datachannels messages.
+// This is helpful when you want to write a string message as bytes
+type DataChannelMessageConfig struct {
+	PPI sctp.PayloadProtocolIdentifier
+}
 
 // DataChannel represents a WebRTC DataChannel
 // The DataChannel interface represents a network channel
@@ -328,12 +335,25 @@ func (d *DataChannel) readLoop() {
 }
 
 // Send sends the binary message to the DataChannel peer
-func (d *DataChannel) Send(data []byte) error {
+func (d *DataChannel) Send(data []byte, conf ...DataChannelMessageConfig) error {
 	err := d.ensureOpen()
 	if err != nil {
 		return err
 	}
 
+	if len(conf) > 0 {
+		switch conf[0].PPI {
+		case sctp.PayloadTypeWebRTCBinary:
+			_, err = d.dataChannel.WriteDataChannel(data, false)
+		case sctp.PayloadTypeWebRTCBinaryEmpty:
+			_, err = d.dataChannel.WriteDataChannel(nil, false)
+		case sctp.PayloadTypeWebRTCString:
+			_, err = d.dataChannel.WriteDataChannel(data, true)
+		case sctp.PayloadTypeWebRTCStringEmpty:
+			_, err = d.dataChannel.WriteDataChannel(nil, true)
+		}
+		return err
+	}
 	_, err = d.dataChannel.WriteDataChannel(data, false)
 	return err
 }
