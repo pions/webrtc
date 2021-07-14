@@ -1,6 +1,10 @@
 package webrtc
 
-import "github.com/pion/rtp"
+import (
+	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
+)
 
 // TrackLocalWriter is the Writer for outbound RTP Packets
 type TrackLocalWriter interface {
@@ -11,13 +15,19 @@ type TrackLocalWriter interface {
 	Write(b []byte) (int, error)
 }
 
+type TrackLocalReader interface {
+	Read(b []byte) (n int, a interceptor.Attributes, err error)
+	ReadRTCP() ([]rtcp.Packet, interceptor.Attributes, error)
+}
+
 // TrackLocalContext is the Context passed when a TrackLocal has been Binded/Unbinded from a PeerConnection, and used
 // in Interceptors.
 type TrackLocalContext struct {
-	id          string
-	params      RTPParameters
-	ssrc        SSRC
-	writeStream TrackLocalWriter
+	id           string
+	params       RTPParameters
+	ssrc         SSRC
+	writeStream  TrackLocalWriter
+	readerStream TrackLocalReader
 }
 
 // CodecParameters returns the negotiated RTPCodecParameters. These are the codecs supported by both
@@ -42,6 +52,10 @@ func (t *TrackLocalContext) SSRC() SSRC {
 // media packets to it
 func (t *TrackLocalContext) WriteStream() TrackLocalWriter {
 	return t.writeStream
+}
+
+func (t *TrackLocalContext) ReadStream() TrackLocalReader {
+	return t.readerStream
 }
 
 // ID is a unique identifier that is used for both Bind/Unbind
